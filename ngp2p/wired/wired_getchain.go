@@ -18,14 +18,7 @@ import (
 )
 
 func (w *Wired) SendGetChain(peerID peer.ID, from [][]byte, to []byte) (id []byte, stream network.Stream, err error) {
-	if len(from) == 0 {
-		err := fmt.Errorf("getchain's from is nil")
-		log.Debug(err)
-
-		return nil, nil, err
-	}
-
-	// avoid nil hash
+	// avoid nil
 	if to == nil {
 		to = ngtypes.GetEmptyHash()
 	}
@@ -72,9 +65,9 @@ func (w *Wired) SendGetChain(peerID peer.ID, from [][]byte, to []byte) (id []byt
 
 // RULE:
 // request [[from a...from b]...to]
-// if to is nil, fork mode on
+// if to is nil, converging mode on
 //
-// fork mode:
+// converging mode:
 // 1. check all hashes in db and try to find existing one(samepoint)
 // 2. if none, return nil
 // 3. if index==0,return everything back
@@ -93,8 +86,25 @@ func (w *Wired) onGetChain(stream network.Stream, msg *message.Message) {
 		return
 	}
 
-	if len(getChainPayload.GetFrom()) == 0 {
-		w.sendReject(msg.Header.MessageId, stream, err)
+	blocks := make([]*ngtypes.Block, 0, defaults.MaxBlocks)
+
+	if getChainPayload.GetFrom() == nil || len(getChainPayload.GetFrom()) == 0 && len(getChainPayload.To) == 16 {
+		// fetching mode
+		from := binary.LittleEndian.Uint64(getChainPayload.GetTo()[0:8])
+		to := binary.LittleEndian.Uint64(getChainPayload.GetTo()[8:16])
+		for blockHeight := from; blockHeight <= to; blockHeight++ {
+			cur, err := w.chain.GetBlockByHeight(blockHeight)
+			if err != nil {
+				err := fmt.Errorf("chain lacks block@%d: %s", blockHeight, err)
+				log.Error(err)
+				w.sendReject(msg.Header.MessageId, stream, err)
+				return
+			}
+
+			blocks = append(blocks, cur)
+		}
+
+		w.sendChain(msg.Header.MessageId, stream, blocks...)
 		return
 	}
 
@@ -103,13 +113,13 @@ func (w *Wired) onGetChain(stream network.Stream, msg *message.Message) {
 	// init cur
 	cur, err := w.chain.GetBlockByHash(getChainPayload.GetFrom()[0])
 	if err != nil {
+		err = fmt.Errorf("cannot get block by hash %x: %s", getChainPayload.GetFrom()[0], err)
+		log.Error(err)
 		w.sendReject(msg.Header.MessageId, stream, err)
 		return
 	}
 
-	blocks := make([]*ngtypes.Block, 0, defaults.MaxBlocks)
-
-	// run fork mode
+	// run converging mode
 	if len(getChainPayload.GetTo()) == 16 {
 		var samepointIndex int
 		// do hashes check first
@@ -130,7 +140,7 @@ func (w *Wired) onGetChain(stream network.Stream, msg *message.Message) {
 			for blockHeight := from; blockHeight <= to; blockHeight++ {
 				cur, err = w.chain.GetBlockByHeight(blockHeight)
 				if err != nil {
-					err := fmt.Errorf("local chain lacks block@%d: %s", blockHeight, err)
+					err := fmt.Errorf("chain lacks block@%d: %s", blockHeight, err)
 					log.Debug(err)
 					w.sendReject(msg.Header.MessageId, stream, err)
 					return
@@ -150,11 +160,11 @@ func (w *Wired) onGetChain(stream network.Stream, msg *message.Message) {
 			return
 		}
 
-		for i := 0; i < len(getChainPayload.GetFrom())-samepointIndex; i++ {
+		for i := 0; i < len(getChainPayload.GetFrom())-1-samepointIndex; i++ {
 			blockHeight := cur.GetHeight() + 1
 			cur, err = w.chain.GetBlockByHeight(blockHeight)
 			if err != nil {
-				err := fmt.Errorf("local chain lacks block@%d: %s", blockHeight, err)
+				err := fmt.Errorf("chain lacks block@%d: %s", blockHeight, err)
 				log.Debug(err)
 				w.sendReject(msg.Header.MessageId, stream, err)
 				return

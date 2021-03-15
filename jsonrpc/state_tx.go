@@ -8,10 +8,11 @@ import (
 
 	"github.com/c0mm4nd/go-jsonrpc2"
 	"github.com/mr-tron/base58"
+	"github.com/ngchain/secp256k1"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/ngchain/ngcore/ngtypes"
 	"github.com/ngchain/ngcore/utils"
-	"github.com/ngchain/secp256k1"
 )
 
 type sendTxParams struct {
@@ -170,7 +171,7 @@ func (s *Server) genTransactionFunc(msg *jsonrpc2.JsonRpcMessage) *jsonrpc2.Json
 
 	tx := ngtypes.NewUnsignedTx(
 		s.pow.Network,
-		ngtypes.TxType_TRANSACTION,
+		ngtypes.TxType_TRANSACT,
 		s.pow.Chain.GetLatestBlockHash(),
 		params.Convener,
 		participants,
@@ -238,9 +239,9 @@ func (s *Server) genRegisterFunc(msg *jsonrpc2.JsonRpcMessage) *jsonrpc2.JsonRpc
 }
 
 type genLogoutParams struct {
-	Convener uint64  `json:"convener"`
-	Fee      float64 `json:"fee"`
-	Extra    string  `json:"extra"`
+	Convener  uint64  `json:"convener"`
+	Fee       float64 `json:"fee"`
+	PublicKey string  `json:"publicKey"` // compressed publicKey, beginning with 02 or 03 (not 04).
 }
 
 func (s *Server) genLogoutFunc(msg *jsonrpc2.JsonRpcMessage) *jsonrpc2.JsonRpcMessage {
@@ -253,7 +254,7 @@ func (s *Server) genLogoutFunc(msg *jsonrpc2.JsonRpcMessage) *jsonrpc2.JsonRpcMe
 
 	fee := new(big.Int).SetUint64(uint64(params.Fee * ngtypes.FloatNG))
 
-	extra, err := hex.DecodeString(params.Extra)
+	extra, err := hex.DecodeString(params.PublicKey)
 	if err != nil {
 		log.Error(err)
 		return jsonrpc2.NewJsonRpcError(msg.ID, jsonrpc2.NewError(0, err))
@@ -285,14 +286,15 @@ func (s *Server) genLogoutFunc(msg *jsonrpc2.JsonRpcMessage) *jsonrpc2.JsonRpcMe
 	return jsonrpc2.NewJsonRpcSuccess(msg.ID, raw)
 }
 
-type genAssignParams struct {
-	Convener uint64  `json:"convener"`
-	Fee      float64 `json:"fee"`
-	Extra    string  `json:"extra"`
+type genAppendParams struct {
+	Convener     uint64  `json:"convener"`
+	Fee          float64 `json:"fee"`
+	ExtraPos     uint64  `json:"extraPos"`
+	ExtraContent string  `json:"extraContent"`
 }
 
-func (s *Server) genAssignFunc(msg *jsonrpc2.JsonRpcMessage) *jsonrpc2.JsonRpcMessage {
-	var params genAssignParams
+func (s *Server) genAppendFunc(msg *jsonrpc2.JsonRpcMessage) *jsonrpc2.JsonRpcMessage {
+	var params genAppendParams
 	err := utils.JSON.Unmarshal(*msg.Params, &params)
 	if err != nil {
 		log.Error(err)
@@ -301,7 +303,18 @@ func (s *Server) genAssignFunc(msg *jsonrpc2.JsonRpcMessage) *jsonrpc2.JsonRpcMe
 
 	fee := new(big.Int).SetUint64(uint64(params.Fee * ngtypes.FloatNG))
 
-	extra, err := hex.DecodeString(params.Extra)
+	extraContent, err := hex.DecodeString(params.ExtraContent)
+	if err != nil {
+		log.Error(err)
+		return jsonrpc2.NewJsonRpcError(msg.ID, jsonrpc2.NewError(0, err))
+	}
+
+	extra := &ngtypes.DeleteExtra{
+		Pos:     params.ExtraPos,
+		Content: extraContent,
+	}
+
+	rawExtra, err := proto.Marshal(extra)
 	if err != nil {
 		log.Error(err)
 		return jsonrpc2.NewJsonRpcError(msg.ID, jsonrpc2.NewError(0, err))
@@ -309,13 +322,13 @@ func (s *Server) genAssignFunc(msg *jsonrpc2.JsonRpcMessage) *jsonrpc2.JsonRpcMe
 
 	tx := ngtypes.NewUnsignedTx(
 		s.pow.Network,
-		ngtypes.TxType_ASSIGN,
+		ngtypes.TxType_APPEND,
 		s.pow.Chain.GetLatestBlockHash(),
 		params.Convener,
 		nil,
 		nil,
 		fee,
-		extra,
+		rawExtra,
 	)
 
 	rawTx, err := utils.Proto.Marshal(tx)
@@ -333,14 +346,16 @@ func (s *Server) genAssignFunc(msg *jsonrpc2.JsonRpcMessage) *jsonrpc2.JsonRpcMe
 	return jsonrpc2.NewJsonRpcSuccess(msg.ID, raw)
 }
 
-type genAppendParams struct {
+type genDeleteParams struct {
 	Convener uint64  `json:"convener"`
 	Fee      float64 `json:"fee"`
-	Extra    string  `json:"extra"`
+
+	ExtraContent string `json:"extraContent"`
+	ExtraPos     uint64 `json:"extraPos"`
 }
 
-func (s *Server) genAppendFunc(msg *jsonrpc2.JsonRpcMessage) *jsonrpc2.JsonRpcMessage {
-	var params genAppendParams
+func (s *Server) genDeleteFunc(msg *jsonrpc2.JsonRpcMessage) *jsonrpc2.JsonRpcMessage {
+	var params genDeleteParams
 	err := utils.JSON.Unmarshal(*msg.Params, &params)
 	if err != nil {
 		log.Error(err)
@@ -349,7 +364,18 @@ func (s *Server) genAppendFunc(msg *jsonrpc2.JsonRpcMessage) *jsonrpc2.JsonRpcMe
 
 	fee := new(big.Int).SetUint64(uint64(params.Fee * ngtypes.FloatNG))
 
-	extra, err := hex.DecodeString(params.Extra)
+	extraContent, err := hex.DecodeString(params.ExtraContent)
+	if err != nil {
+		log.Error(err)
+		return jsonrpc2.NewJsonRpcError(msg.ID, jsonrpc2.NewError(0, err))
+	}
+
+	extra := &ngtypes.DeleteExtra{
+		Pos:     params.ExtraPos,
+		Content: extraContent,
+	}
+
+	rawExtra, err := proto.Marshal(extra)
 	if err != nil {
 		log.Error(err)
 		return jsonrpc2.NewJsonRpcError(msg.ID, jsonrpc2.NewError(0, err))
@@ -363,7 +389,7 @@ func (s *Server) genAppendFunc(msg *jsonrpc2.JsonRpcMessage) *jsonrpc2.JsonRpcMe
 		nil,
 		nil,
 		fee,
-		extra,
+		rawExtra,
 	)
 
 	rawTx, err := utils.Proto.Marshal(tx)

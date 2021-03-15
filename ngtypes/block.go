@@ -244,22 +244,54 @@ func (x *Block) CheckError() error {
 		return err
 	}
 
+	err = x.verifyNonce()
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
-// Hash will help you get the hash of block.
-func (x *Block) Hash() []byte {
+func (x *Block) verifyHash() error {
+	if x.Id == nil {
+		x.Hash()
+		return nil
+	}
+
 	b := proto.Clone(x).(*Block)
 	b.Txs = nil // txs can be represented by triehash
 
-	raw, err := utils.Proto.Marshal(x)
+	raw, err := utils.Proto.Marshal(b)
 	if err != nil {
 		panic(err)
 	}
 
 	hash := sha3.Sum256(raw)
 
-	return hash[:]
+	if !bytes.Equal(hash[:], x.Id) {
+		return fmt.Errorf("block@%d hash %x not match its id %x", x.Height, hash, x.Id)
+	}
+
+	return nil
+}
+
+// Hash will help you get the hash of block.
+func (x *Block) Hash() []byte {
+	if x.Id == nil {
+		b := proto.Clone(x).(*Block)
+		b.Txs = nil // txs can be represented by triehash
+
+		raw, err := utils.Proto.Marshal(b)
+		if err != nil {
+			panic(err)
+		}
+
+		hash := sha3.Sum256(raw)
+
+		x.Id = hash[:]
+	}
+
+	return x.Id
 }
 
 // GetPrevHash is a helper to get the prev block hash from block header.

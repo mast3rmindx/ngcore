@@ -2,16 +2,14 @@ package main
 
 import (
 	"fmt"
+	"net"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"runtime"
 	"runtime/pprof"
 	"strings"
 	"time"
-
-	"github.com/ngchain/ngcore/ngchain"
-	"github.com/ngchain/ngcore/ngpool"
-	"github.com/ngchain/ngcore/ngstate"
-	"github.com/ngchain/ngcore/storage"
 
 	logging "github.com/ipfs/go-log/v2"
 	"github.com/mr-tron/base58"
@@ -23,14 +21,24 @@ import (
 	"github.com/ngchain/ngcore/jsonrpc"
 	"github.com/ngchain/ngcore/keytools"
 	"github.com/ngchain/ngcore/ngblocks"
+	"github.com/ngchain/ngcore/ngchain"
 	"github.com/ngchain/ngcore/ngp2p"
+	"github.com/ngchain/ngcore/ngpool"
+	"github.com/ngchain/ngcore/ngstate"
 	"github.com/ngchain/ngcore/ngtypes"
+	"github.com/ngchain/ngcore/storage"
 )
 
-var strictModeFlag = &cli.BoolFlag{
-	Name:  "strict",
-	Value: true,
+var nonStrictModeFlag = &cli.BoolFlag{
+	Name: "non-strict",
+	//Value: true, // local chain will be able to start from a checkpoint if false
 	Usage: "Enable forcing ngcore starts from the genesis block",
+}
+
+var snapshotModeFlag = &cli.BoolFlag{
+	Name:  "snapshot",
+	Value: false,
+	Usage: "Enable snapshot boost for syncing and converging",
 }
 
 var p2pTCPPortFlag = &cli.IntFlag{
@@ -49,6 +57,12 @@ var rpcPortFlag = &cli.IntFlag{
 	Name:  "rpc-port",
 	Usage: "Port for JSON RPC",
 	Value: defaultRPCPort,
+}
+
+var rpcDisableFlag = &cli.StringSliceFlag{
+	Name:  "rpc-disable",
+	Usage: "Disable some JSON RPC methods",
+	Value: nil,
 }
 
 var isBootstrapFlag = &cli.BoolFlag{
@@ -116,16 +130,23 @@ var action = func(c *cli.Context) error {
 		mining = runtime.NumCPU()
 	}
 
-	isStrictMode := isBootstrapNode || c.Bool(strictModeFlag.Name)
+	strictMode := isBootstrapNode || !c.Bool(nonStrictModeFlag.Name)
+	snapshotMode := c.Bool(snapshotModeFlag.Name)
+
 	p2pTCPPort := c.Int(p2pTCPPortFlag.Name)
 	rpcHost := c.String(rpcHostFlag.Name)
 	rpcPort := c.Int(rpcPortFlag.Name)
+	rpcDisables := c.StringSlice(rpcDisableFlag.Name)
 	keyPass := c.String(keyPassFlag.Name)
 	keyFile := c.String(keyFileNameFlag.Name)
 	p2pKeyFile := c.String(p2pKeyFileFlag.Name)
 	withProfile := c.Bool(profileFlag.Name)
 	inMem := c.Bool(inMemFlag.Name)
 	dbFolder := c.String(dbFolderFlag.Name)
+
+	if !strictMode {
+		log.Warn("running on non-strict mode")
+	}
 
 	var network = ngtypes.NetworkType_TESTNET
 	if c.Bool(testNetFlag.Name) {
@@ -150,6 +171,15 @@ var action = func(c *cli.Context) error {
 			panic(err)
 		}
 
+		go func() {
+			listener, err := net.Listen("tcp", ":0")
+			if err != nil {
+				panic(err)
+			}
+			log.Warnf("profiling on http://localhost:%d", listener.Addr().(*net.TCPAddr).Port)
+			panic(http.Serve(listener, nil))
+		}()
+
 		defer pprof.StopCPUProfile()
 	}
 
@@ -170,14 +200,8 @@ var action = func(c *cli.Context) error {
 		}
 	}()
 
-	var store *ngblocks.BlockStore
-	if isStrictMode {
-		store = ngblocks.Init(db, network)
-		// then sync
-	} else {
-		// TODO: use the new origin block to initialize the ngblocks
-		store = ngblocks.Init(db, network)
-	}
+	store := ngblocks.Init(db, network)
+	// then sync
 	state := ngstate.InitStateFromGenesis(db, network)
 
 	chain := ngchain.Init(db, network, store, state)
@@ -201,6 +225,8 @@ var action = func(c *cli.Context) error {
 		localNode,
 		consensus.PoWorkConfig{
 			Network:                     network,
+			StrictMode:                  strictMode,
+			SnapshotMode:                snapshotMode,
 			DisableConnectingBootstraps: isBootstrapNode || network == ngtypes.NetworkType_ZERONET,
 			MiningThread:                mining,
 			PrivateKey:                  key,
@@ -208,8 +234,27 @@ var action = func(c *cli.Context) error {
 	)
 	pow.GoLoop()
 
-	rpc := jsonrpc.NewServer(rpcHost, rpcPort, pow)
-	go rpc.Serve()
+	// when rpcPort <= 0, disable rpc server
+	if rpcPort > 0 {
+		jsonRPCServerConfig := jsonrpc.ServerConfig{
+			Host:                 rpcHost,
+			Port:                 rpcPort,
+			DisableP2PMethods:    false,
+			DisableMiningMethods: false,
+		}
+
+		for i := range rpcDisables {
+			switch strings.ToLower(rpcDisables[i]) {
+			case "p2p":
+				jsonRPCServerConfig.DisableP2PMethods = true
+			case "mining":
+				jsonRPCServerConfig.DisableMiningMethods = true
+			}
+		}
+
+		rpc := jsonrpc.NewServer(pow, jsonRPCServerConfig)
+		go rpc.Serve()
+	}
 
 	// notify the exit events
 	select {}

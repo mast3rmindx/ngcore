@@ -11,10 +11,12 @@ import (
 	logging "github.com/ipfs/go-log/v2"
 	core "github.com/libp2p/go-libp2p-core"
 	"github.com/libp2p/go-msgio"
+
 	"github.com/ngchain/ngcore/ngp2p/defaults"
 	"github.com/ngchain/ngcore/ngp2p/message"
 
 	"github.com/libp2p/go-libp2p-core/network"
+
 	"github.com/ngchain/ngcore/utils"
 )
 
@@ -82,6 +84,10 @@ func (w *Wired) handleStream(stream network.Stream) {
 		w.onPing(stream, msg)
 	case message.MessageType_GETCHAIN:
 		w.onGetChain(stream, msg)
+	case message.MessageType_GETSHEET:
+		w.onGetChain(stream, msg)
+	default:
+		w.sendReject(msg.Header.MessageId, stream, fmt.Errorf("unsupported protocol method"))
 	}
 
 	err = stream.Close()

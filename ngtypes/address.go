@@ -5,8 +5,9 @@ import (
 
 	"github.com/mr-tron/base58"
 	"github.com/ngchain/go-schnorr"
-	"github.com/ngchain/ngcore/utils"
 	"github.com/ngchain/secp256k1"
+
+	"github.com/ngchain/ngcore/utils"
 )
 
 // Address is the anonymous address for receiving coin, 2+33=35 length
@@ -48,7 +49,7 @@ func NewAddressFromBS58(s string) (Address, error) {
 	return addr, nil
 }
 
-// PubKey gets the public key from address for validition
+// PubKey gets the public key from address for validation
 func (a Address) PubKey() secp256k1.PublicKey {
 	return utils.Bytes2PublicKey(a[2:])
 }

@@ -1,6 +1,7 @@
 package consensus
 
 import (
+	"fmt"
 	"sort"
 	"sync"
 
@@ -8,6 +9,7 @@ import (
 )
 
 func (mod *syncModule) bootstrap() {
+	log.Warn("bootstrapping ... ")
 	peerStore := mod.localNode.Peerstore()
 
 	// init the store
@@ -31,8 +33,8 @@ func (mod *syncModule) bootstrap() {
 
 	peerNum := len(mod.store)
 	if peerNum < minDesiredPeerCount {
-		log.Warnf("lack remote peer for bootstrapping")
-		// TODO: when peer count is less than the minDesiredPeerCount, the consensus shouldn't do any sync nor fork
+		log.Warnf("lack remote peer for bootstrapping, current peer num: %d", peerNum)
+		// TODO: when peer count is less than the minDesiredPeerCount, the consensus shouldn't do any sync nor converge
 	}
 
 	slice := make([]*RemoteRecord, len(mod.store))
@@ -52,28 +54,44 @@ func (mod *syncModule) bootstrap() {
 
 	// catch error
 	var err error
-	{
-		if records := mod.MustSync(slice); records != nil && len(records) != 0 {
-			for _, record := range records {
-				err = mod.doSync(record)
+	if records := mod.MustSync(slice); records != nil && len(records) != 0 {
+		for _, record := range records {
+			if !mod.pow.StrictMode && mod.pow.Chain.GetLatestBlockHeight() == 0 {
+				//
+				err = mod.switchToRemoteCheckpoint(record)
 				if err != nil {
-					log.Warnf("do sync failed: %s, maybe require forking", err)
-				} else {
-					break
+					panic(fmt.Errorf("failed to fast sync via checkpoint: %s", err))
 				}
 			}
-		}
 
-		// do fork check after sync check
-		if records := mod.MustFork(slice); records != nil && len(records) != 0 {
-			for _, record := range records {
-				err = mod.doFork(record)
-				if err != nil {
-					log.Errorf("forking is failed: %s", err)
-					record.recordFailure()
-				} else {
-					break
-				}
+			if mod.pow.SnapshotMode {
+				err = mod.doSnapshotSync(record)
+			} else {
+				err = mod.doSync(record)
+			}
+
+			if err != nil {
+				log.Warnf("do sync failed: %s, maybe require converging", err)
+			} else {
+				break
+			}
+		}
+	}
+
+	// do converge check after sync check
+	if records := mod.MustConverge(slice); records != nil && len(records) != 0 {
+		for _, record := range records {
+			if mod.pow.SnapshotMode {
+				err = mod.doSnapshotConverging(record)
+			} else {
+				err = mod.doConverging(record)
+			}
+
+			if err != nil {
+				log.Errorf("converging failed: %s", err)
+				record.recordFailure()
+			} else {
+				break
 			}
 		}
 	}

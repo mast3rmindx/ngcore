@@ -17,7 +17,7 @@ func (chain *Chain) GetLatestBlock() *ngtypes.Block {
 
 	block, err := chain.GetBlockByHeight(height)
 	if err != nil {
-		log.Error(err)
+		panic(err)
 	}
 
 	return block
@@ -72,31 +72,20 @@ func (chain *Chain) GetLatestCheckpointHash() []byte {
 // GetLatestCheckpoint returns the latest checkpoint block
 func (chain *Chain) GetLatestCheckpoint() *ngtypes.Block {
 	b := chain.GetLatestBlock()
-	if b.IsGenesis() {
+	if b.IsGenesis() || b.IsHead() {
 		return b
 	}
 
-	if err := chain.View(func(txn *badger.Txn) error {
-		for {
-			hash := b.GetPrevHash()
-			block, err := ngblocks.GetBlockByHash(txn, hash)
-			if err != nil {
-				return err
-			}
-			b = block
-
-			if b.IsHead() {
-				return nil
-			}
-		}
-	}); err != nil {
+	checkpointHeight := b.Height - b.Height%ngtypes.BlockCheckRound
+	b, err := chain.GetBlockByHeight(checkpointHeight)
+	if err != nil {
 		log.Errorf("error when getting latest checkpoint, maybe chain is broken, please resync: %s", err)
 	}
 
 	return b
 }
 
-// GetBlockByHeight returns a block by height inputed
+// GetBlockByHeight returns a block by height inputted
 func (chain *Chain) GetBlockByHeight(height uint64) (*ngtypes.Block, error) {
 	if height == 0 {
 		return ngtypes.GetGenesisBlock(chain.Network), nil
@@ -119,7 +108,7 @@ func (chain *Chain) GetBlockByHeight(height uint64) (*ngtypes.Block, error) {
 	return block, nil
 }
 
-// GetBlockByHash returns a block by hash inputed
+// GetBlockByHash returns a block by hash inputted
 func (chain *Chain) GetBlockByHash(hash []byte) (*ngtypes.Block, error) {
 	if bytes.Equal(hash, ngtypes.GetGenesisBlockHash(chain.Network)) {
 		return ngtypes.GetGenesisBlock(chain.Network), nil
@@ -148,10 +137,26 @@ func (chain *Chain) GetBlockByHash(hash []byte) (*ngtypes.Block, error) {
 
 // GetOriginBlock returns the genesis block for strict node, but can be any checkpoint for other node
 func (chain *Chain) GetOriginBlock() *ngtypes.Block {
-	return ngtypes.GetGenesisBlock(chain.Network) // TODO: for partial sync func
+	var origin *ngtypes.Block
+	err := chain.View(func(txn *badger.Txn) error {
+		var err error
+		origin, err = ngblocks.GetOriginBlock(txn)
+		if err != nil {
+			return err
+		}
+
+		return err
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	return origin
 }
 
-// ForceApplyBlocks checks the block and then calls PutNewBlock, after which update the state
+// ForceApplyBlocks simply checks the block and then calls chain.ForcePutNewBlock
+// but **do not** upgrade the state.
+// so, after this, dev should do a regenerate or import latest sheet.
 func (chain *Chain) ForceApplyBlocks(blocks []*ngtypes.Block) error {
 	if err := chain.Update(func(txn *badger.Txn) error {
 		for i := 0; i < len(blocks); i++ {

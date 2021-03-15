@@ -3,11 +3,18 @@
 ## v0.0.20
 
 - DONE: fix bugs
+- DONE: implement getsheet&sheet on ngp2p
+- DONE: rename "fork" to "converge"
+- DONE: add snapshotSync and snapshotConverge
+- DONE: upgrade libp2p
+- DONE: add non-strict mode(fast sync)
+- DONE: add GetSheet and Sheet p2p message
+- DONE: enhance mining job update
+- DONE: add id for Block & Tx representing the hash
+- TODO: use subs field in Block to implement sub-blocks revenue in v0.0.21
 
 ## v0.0.19
 
-- TODO: add fast-sync mode
-- TODO: add GetSheet and Sheet p2p message
 - DONE: support multi-network
 - DONE: add regression testnet
 

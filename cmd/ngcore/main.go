@@ -17,9 +17,9 @@ func main() {
 	app.Action = action
 
 	app.Flags = []cli.Flag{
-		strictModeFlag,
+		nonStrictModeFlag, snapshotModeFlag,
 		p2pTCPPortFlag, p2pKeyFileFlag,
-		rpcHostFlag, rpcPortFlag,
+		rpcHostFlag, rpcPortFlag, rpcDisableFlag,
 		miningFlag,
 		isBootstrapFlag, profileFlag,
 		keyFileNameFlag, keyPassFlag,

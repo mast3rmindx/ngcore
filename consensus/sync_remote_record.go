@@ -2,18 +2,22 @@ package consensus
 
 import (
 	"bytes"
-	"go.uber.org/atomic"
 	"math/big"
 	"time"
 
+	"go.uber.org/atomic"
+
 	"github.com/libp2p/go-libp2p-core/peer"
+
 	"github.com/ngchain/ngcore/ngtypes"
 )
 
 type RemoteRecord struct {
-	id                   peer.ID
-	origin               uint64 // rank
-	latest               uint64
+	id     peer.ID
+	origin uint64 // rank
+	latest uint64
+
+	checkpointHeight     uint64
 	checkpointHash       []byte   // trigger
 	checkpointActualDiff *big.Int // rank
 	lastChatTime         int64
@@ -23,10 +27,18 @@ type RemoteRecord struct {
 }
 
 func NewRemoteRecord(id peer.ID, origin, latest uint64, checkpointHash, checkpointActualDiff []byte) *RemoteRecord {
+	var checkpointHeight uint64
+	if latest%ngtypes.BlockCheckRound == 0 {
+		checkpointHeight = latest
+	} else {
+		checkpointHeight = latest - latest%ngtypes.BlockCheckRound
+	}
+
 	return &RemoteRecord{
 		id:                   id,
 		origin:               origin,
 		latest:               latest,
+		checkpointHeight:     checkpointHeight,
 		checkpointHash:       checkpointHash,
 		checkpointActualDiff: new(big.Int).SetBytes(checkpointActualDiff),
 		lastChatTime:         time.Now().Unix(),
@@ -38,6 +50,7 @@ func NewRemoteRecord(id peer.ID, origin, latest uint64, checkpointHash, checkpoi
 func (r *RemoteRecord) update(origin, latest uint64, checkpointHash, checkpointActualDiff []byte) {
 	r.origin = origin
 	r.latest = latest
+	r.checkpointHeight = latest - latest%ngtypes.BlockCheckRound
 	r.checkpointHash = checkpointHash
 	r.checkpointActualDiff = new(big.Int).SetBytes(checkpointActualDiff)
 	r.lastChatTime = time.Now().Unix()
@@ -55,11 +68,11 @@ func (r *RemoteRecord) shouldSync(latestHeight uint64) bool {
 	return true
 }
 
-// RULE: when forking?
+// RULE: when converging?
 // Situation #1: remote height is higher than local, AND checkpoint is on higher level
 // Situation #2: remote height is higher than local, AND checkpoint is on same level, AND remote checkpoint takes more rank (with more ActualDiff)
-// TODO: add a cap for forking
-func (r *RemoteRecord) shouldFork(latestCheckPoint *ngtypes.Block, latestHeight uint64) bool {
+// TODO: add a cap for converging
+func (r *RemoteRecord) shouldConverge(latestCheckPoint *ngtypes.Block, latestHeight uint64) bool {
 	if time.Now().Unix() < r.lastFailedTime+int64(60*60) {
 		return false
 	}

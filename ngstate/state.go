@@ -24,13 +24,23 @@ var (
 //  init (S0,S0)  -->   (S0,S1)  -->    (S1, S2)
 type State struct {
 	*badger.DB
+	*SnapshotManager
+
 	vms map[ngtypes.AccountNum]*VM
 }
 
 // InitStateFromSheet will initialize the state in the given db, with the sheet data
-func InitStateFromSheet(db *badger.DB, sheet *ngtypes.Sheet) *State {
+// this func is written for snapshot sync/converging when initializing from non-genesis
+// checkpoint
+func InitStateFromSheet(db *badger.DB, network ngtypes.NetworkType, sheet *ngtypes.Sheet) *State {
 	state := &State{
-		DB:  db,
+		DB: db,
+		SnapshotManager: &SnapshotManager{
+			RWMutex:        sync.RWMutex{},
+			heightToHash:   make(map[uint64]string),
+			hashToSnapshot: make(map[string]*ngtypes.Sheet),
+		},
+
 		vms: make(map[ngtypes.AccountNum]*VM),
 	}
 	err := state.Update(func(txn *badger.Txn) error {
@@ -46,7 +56,12 @@ func InitStateFromSheet(db *badger.DB, sheet *ngtypes.Sheet) *State {
 // InitStateFromGenesis will initialize the state in the given db, with the default genesis sheet data
 func InitStateFromGenesis(db *badger.DB, network ngtypes.NetworkType) *State {
 	state := &State{
-		DB:  db,
+		DB: db,
+		SnapshotManager: &SnapshotManager{
+			RWMutex:        sync.RWMutex{},
+			heightToHash:   make(map[uint64]string),
+			hashToSnapshot: make(map[string]*ngtypes.Sheet),
+		},
 		vms: make(map[ngtypes.AccountNum]*VM),
 	}
 	err := state.Update(func(txn *badger.Txn) error {
@@ -93,13 +108,29 @@ func initFromSheet(txn *badger.Txn, sheet *ngtypes.Sheet) error {
 	return nil
 }
 
-var regenerateLock sync.Mutex
+// RebuildFromSheet will overwrite a state from the given sheet
+func (state *State) RebuildFromSheet(sheet *ngtypes.Sheet) error {
+	err := state.DropPrefix(addrTobBalancePrefix)
+	if err != nil {
+		return err
+	}
+	err = state.DropPrefix(numToAccountPrefix)
+	if err != nil {
+		return err
+	}
 
-// Regenerate works for doing fork and remove all
-func (state *State) Regenerate() error {
-	regenerateLock.Lock()
-	defer regenerateLock.Unlock()
+	err = state.Update(func(txn *badger.Txn) error {
+		return initFromSheet(txn, sheet)
+	})
+	if err != nil {
+		return err
+	}
 
+	return nil
+}
+
+// RebuildFromBlockStore works for doing converge and remove all
+func (state *State) RebuildFromBlockStore() error {
 	err := state.DropPrefix(addrTobBalancePrefix)
 	if err != nil {
 		return err
